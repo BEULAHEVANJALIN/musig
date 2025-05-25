@@ -4,3 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+crypto-rs = { git = "https://github.com/BEULAHEVANJALIN/crypto-rs" }
+num-bigint = "0.4.6"
+num-traits = "0.2.19"
+rand = "0.9.1"
+sha2 = "0.10.9"

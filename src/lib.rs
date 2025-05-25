@@ -1,14 +1,6 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+//! MuSig1: Multi-signature Schnorr implementation (n-of-n) using secp256k1.
+//! Uses crypto-rs v0.1.0 (https://github.com/BEULAHEVANJALIN/crypto-rs) for elliptic curve operations.
+#![allow(non_snake_case)]
+mod keyagg;
+pub use keyagg::keyagg;
+pub use keyagg::keyagg_pure;
