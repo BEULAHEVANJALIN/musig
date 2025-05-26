@@ -5,7 +5,9 @@ edition = "2024"
 
 [dependencies]
 crypto-rs = { git = "https://github.com/BEULAHEVANJALIN/crypto-rs" }
+hmac = "0.12.1"
 num-bigint = "0.4.6"
 num-traits = "0.2.19"
 rand = "0.9.1"
 sha2 = "0.10.9"
+thiserror = "2.0.12"
