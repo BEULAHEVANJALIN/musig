@@ -7,3 +7,5 @@ pub use keyagg::keyagg_pure;
 mod nonce;
 pub use nonce::NonceCommitment;
 pub use nonce::aggregate_nonces;
+mod challenge;
+pub use challenge::compute_challenge;
