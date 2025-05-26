@@ -3,7 +3,7 @@
 //! This module provides two variants of the MuSig1 key aggregation algorithm:
 //!
 //! 1. Pure MuSig1 (keyagg_pure) - the original protocol as described in the
-//!    https://eprint.iacr.org/2018/068.pdf paper: lexicographically sort keys, derive all coefficients
+//!    <https://eprint.iacr.org/2018/068.pdf> paper: lexicographically sort keys, derive all coefficients
 //!    uniformly via tagged hashes, and aggregate.
 //!
 //! 2. C-style MuSig1 (keyagg) - the optimized variant from the libsecp256k1 implementation,
@@ -13,7 +13,7 @@
 use crypto_rs::schnorr::tagged_hash;
 use crypto_rs::secp256k1::{Secp256k1Point, Secp256k1Scalar};
 
-/// Pure MuSig1 key aggregation function, as described in the https://eprint.iacr.org/2018/068.pdf paper.
+/// Pure MuSig1 key aggregation function, as described in the <https://eprint.iacr.org/2018/068.pdf> paper.
 ///
 /// # Parameters
 /// - `pubkeys`: slice of public keys to aggregate (n-of-n).
