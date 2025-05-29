@@ -44,9 +44,16 @@ use crypto_rs::secp256k1::{Secp256k1Point, Secp256k1Scalar};
 /// It is not recommended for production use where performance is critical.
 pub fn keyagg_pure(pubkeys: &[Secp256k1Point]) -> (Secp256k1Point, Vec<Secp256k1Scalar>) {
     assert!(!pubkeys.is_empty(), "No public keys provided");
-    // Trivial single-key case
+    // Trivial single-key case: single‐party Musig === plain Schnorr
     if pubkeys.len() == 1 {
-        return (pubkeys[0].clone(), vec![Secp256k1Scalar::one()]);
+        let mut X_agg = pubkeys[0].clone();
+        let mut coefs = vec![Secp256k1Scalar::one()];
+        // enforce even-Y and flip the lone coefficient if needed
+        if X_agg.y_is_odd() {
+            X_agg = -X_agg;
+            coefs[0] = -coefs[0].clone();
+        }
+        return (X_agg, coefs);
     }
 
     // Check if all provided public keys are identical.
@@ -133,7 +140,14 @@ pub fn keyagg(pubkeys: &[Secp256k1Point]) -> (Secp256k1Point, Vec<Secp256k1Scala
     assert!(!pubkeys.is_empty(), "No public keys provided");
     // Trivial single-key
     if pubkeys.len() == 1 {
-        return (pubkeys[0].clone(), vec![Secp256k1Scalar::one()]);
+        let mut X_agg = pubkeys[0].clone();
+        let mut coefs = vec![Secp256k1Scalar::one()];
+        // enforce even-Y and flip the lone coefficient if needed
+        if X_agg.y_is_odd() {
+            X_agg = -X_agg;
+            coefs[0] = -coefs[0].clone();
+        }
+        return (X_agg, coefs);
     }
 
     // Check if all provided public keys are identical.

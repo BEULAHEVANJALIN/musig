@@ -55,7 +55,7 @@ pub fn compute_challenge(
     buf.extend_from_slice(msg);
 
     // Domain-separation tag for MuSig1
-    const TAG: &str = "MuSig/agg";
+    const TAG: &str = "BIP0340/challenge";
 
     // First pass: tagged SHA256
     let digest = tagged_hash(TAG, &buf);

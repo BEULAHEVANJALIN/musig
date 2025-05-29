@@ -60,7 +60,7 @@ dependencies = [
 [[package]]
 name = "crypto-rs"
 version = "0.1.0"
-source = "git+https://github.com/BEULAHEVANJALIN/crypto-rs.git#eb118bda3cc11952312d18b98e57c9e093b0912f"
+source = "git+https://github.com/BEULAHEVANJALIN/crypto-rs#eb118bda3cc11952312d18b98e57c9e093b0912f"
 dependencies = [
  "csv",
  "hex",

@@ -9,3 +9,4 @@ pub use nonce::NonceCommitment;
 pub use nonce::aggregate_nonces;
 mod challenge;
 pub use challenge::compute_challenge;
+pub mod session;

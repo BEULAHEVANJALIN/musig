@@ -38,7 +38,7 @@ pub struct Reveal(pub [u8; 33]);
 #[derive(Clone)]
 pub struct NonceCommitment {
     /// Secret scalar `k_i`.
-    pub nonce: Secp256k1Scalar,
+    pub secret: Secp256k1Scalar,
     /// Public nonce point `R_i = k_i * G`.
     pub pub_nonce: Secp256k1Point,
     /// Commitment `t_i = H_com(R_i_bytes)`.
@@ -52,7 +52,7 @@ impl NonceCommitment {
         let bytes = pub_nonce.to_bytes_compressed();
         let commitment = tagged_hash("MuSig/nonce_commit", &bytes);
         NonceCommitment {
-            nonce: k,
+            secret: k,
             pub_nonce,
             commitment,
         }
@@ -90,7 +90,7 @@ impl NonceCommitment {
     /// flip both secret and public if aggregate `R_agg` was negated.
     pub fn apply_flip(&mut self, flip: bool) {
         if flip {
-            self.nonce = -self.nonce.clone();
+            self.secret = -self.secret.clone();
             self.pub_nonce = -self.pub_nonce.clone();
         }
     }
@@ -152,7 +152,7 @@ mod tests {
     fn test_random_nonzero() {
         let n = NonceCommitment::random().unwrap();
         // secret must be non-zero
-        assert!(!n.nonce.is_zero());
+        assert!(!n.secret.is_zero());
         // public = k·G must not be the identity
         let R = decode_reveal(&n.reveal());
         assert!(R != Secp256k1Point::identity());
