@@ -10,3 +10,5 @@ pub use nonce::aggregate_nonces;
 mod challenge;
 pub use challenge::compute_challenge;
 pub mod session;
+pub mod sign;
+pub mod verify;
