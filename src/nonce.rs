@@ -13,7 +13,7 @@ use sha2::Sha256;
 use thiserror::Error;
 
 /// Errors for nonce operations
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq)]
 pub enum NonceError {
     /// Scalar reduced to zero (after retries)
     #[error("nonce scalar is zero")]
@@ -24,6 +24,9 @@ pub enum NonceError {
     /// Input point bytes were invalid or correspond to identity
     #[error("invalid public nonce point")]
     InvalidPoint,
+    /// Input point bytes were of wrong length
+    #[error("wrong length")]
+    WrongLength,
 }
 
 /// Round-1 commit message to broadcast: `t_i = H_com(R_i_bytes)`.
@@ -32,7 +35,60 @@ pub struct Commit(pub [u8; 32]);
 
 /// Round-2 reveal message to broadcast: compresed `R_i = k_i * G`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Reveal(pub [u8; 33]);
+pub struct Reveal(pub Vec<u8>);
+
+impl Reveal {
+    /// Create a new reveal from exactly 33 or 66 bytes.
+    pub fn new(bytes: Vec<u8>) -> Result<Self, NonceError> {
+        match bytes.len() {
+            33 | 66 => Ok(Reveal(bytes)),
+            _ => Err(NonceError::WrongLength),
+        }
+    }
+
+    /// Helper to “decode” a Reveal into a single Secp256k1Point:
+    ///  • If it’s 33 bytes, treat it as a single compressed point.
+    ///  • If it’s 66 bytes, split into two 33-byte chunks, parse both, and return their sum.
+    pub fn decode_reveal(r: &Reveal) -> Secp256k1Point {
+        let bytes = &r.0;
+        match bytes.len() {
+            33 => {
+                // MuSig 1 style: exactly one 33‐byte compressed point
+                let arr: [u8; 33] = bytes[..33]
+                    .try_into()
+                    .expect("Reveal must be exactly 33 bytes");
+                Secp256k1Point::from_bytes_compressed(&arr).expect("Invalid 33-byte reveal point")
+            }
+            66 => {
+                // MuSig 2 style: two concatenated 33‐byte compressed points
+                let arr1: [u8; 33] = bytes[0..33]
+                    .try_into()
+                    .expect("First half must be 33 bytes");
+                let arr2: [u8; 33] = bytes[33..66]
+                    .try_into()
+                    .expect("Second half must be 33 bytes");
+
+                // Decompress the first half—if that fails, panic (unexpected).
+                let p1 = Secp256k1Point::from_bytes_compressed(&arr1)
+                    .expect("Invalid first 33-byte half");
+
+                // For the second half, we allow either:
+                //  • All zeros (identity), or
+                //  • A valid compressed point, or
+                //  • Anything else ⇒ treat as identity (no panic).
+                let p2 = if arr2 == [0u8; 33] {
+                    Secp256k1Point::identity()
+                } else {
+                    Secp256k1Point::from_bytes_compressed(&arr2)
+                        .unwrap_or_else(|| Secp256k1Point::identity())
+                };
+
+                p1 + &p2
+            }
+            _ => panic!("Reveal must be length 33 or 66"),
+        }
+    }
+}
 
 /// Holds a single signer’s nonce state (secret, public, and commitment).
 #[derive(Clone)]
@@ -102,7 +158,7 @@ impl NonceCommitment {
 
     /// Extract round-2 reveal message.
     pub fn reveal(&self) -> Reveal {
-        Reveal(self.pub_nonce.to_bytes_compressed())
+        Reveal(self.pub_nonce.to_bytes_compressed().to_vec())
     }
 
     /// Verify that the commitment matches the given public nonce.
@@ -112,22 +168,93 @@ impl NonceCommitment {
     }
 }
 
-/// Aggregate a slice of round‑2 reveals into a single nonce `R_agg`, enforcing even‑Y.
-/// Returns the normalized `R_agg` and a flag indicating whether a global flip occurred.
-pub fn aggregate_nonces(reveals: &[Reveal]) -> Result<(Secp256k1Point, bool), NonceError> {
+/// Aggregate a slice of round-2 `Reveal`s into a single nonce `R_agg`.
+///
+/// - If *all* reveals are 33 bytes long (MuSig 1 mode),
+///   sum each 33-byte point into `agg1`, normalize it (flip if odd-Y),
+///   and return a *33-byte* `Reveal(compressed(agg1))`.
+///
+/// - Otherwise (if any reveal is 66 bytes, MuSig 2 mode),
+///   interpret each 66-byte `Reveal` as two 33-byte halves `(R1_i, R2_i)`,
+///   sum all `R1_i → agg1` and all `R2_i → agg2`, normalize both halves if needed,
+///   and return a *66-byte* `Reveal = compressed(agg1) ‖ compressed(agg2)`.
+///
+/// Returns `Ok((Reveal, flipped_flag))` or an appropriate `Err(…)`.
+///
+pub fn aggregate_nonces(reveals: &[Reveal]) -> Result<(Reveal, bool), NonceError> {
     if reveals.is_empty() {
-        return Err(NonceError::InvalidPoint);
+        return Err(NonceError::NoNonces);
     }
-    let mut agg = Secp256k1Point::identity();
+
+    // Accumulators for the two halves:
+    let mut agg1 = Secp256k1Point::identity();
+    let mut agg2 = Secp256k1Point::identity();
+    // Rename saw_66 → has_double_reveal
+    let mut has_double_reveal = false;
+
     for Reveal(bytes) in reveals {
-        let R = Secp256k1Point::from_bytes_compressed(bytes).ok_or(NonceError::InvalidPoint)?;
-        agg = agg + &R;
+        match bytes.len() {
+            33 => {
+                // MuSig 1 style: exactly one compressed point → add to agg1
+                let arr: [u8; 33] = bytes[..33]
+                    .try_into()
+                    .map_err(|_| NonceError::WrongLength)?;
+                let R =
+                    Secp256k1Point::from_bytes_compressed(&arr).ok_or(NonceError::InvalidPoint)?;
+                agg1 = agg1 + &R;
+                // agg2 remains identity
+            }
+            66 => {
+                // MuSig 2 style: split into two halves
+                has_double_reveal = true;
+                let arr1: [u8; 33] = bytes[0..33]
+                    .try_into()
+                    .map_err(|_| NonceError::WrongLength)?;
+                let arr2: [u8; 33] = bytes[33..66]
+                    .try_into()
+                    .map_err(|_| NonceError::WrongLength)?;
+                let R1 =
+                    Secp256k1Point::from_bytes_compressed(&arr1).ok_or(NonceError::InvalidPoint)?;
+                let R2 =
+                    Secp256k1Point::from_bytes_compressed(&arr2).ok_or(NonceError::InvalidPoint)?;
+                agg1 = agg1 + &R1;
+                agg2 = agg2 + &R2;
+            }
+            _ => {
+                // Wrong length
+                return Err(NonceError::WrongLength);
+            }
+        }
     }
-    let flip = agg.y_is_odd();
+
+    // If we never saw any 66-byte reveal, we are in MuSig 1 mode.
+    if !has_double_reveal {
+        // Normalize agg1 to even-Y
+        let flip = agg1.y_is_odd();
+        if flip {
+            agg1 = -agg1;
+        }
+        // Return a 33-byte reveal = compressed(agg1)
+        let out33 = agg1.to_bytes_compressed().to_vec();
+        return Ok((Reveal(out33), flip));
+    }
+
+    // Otherwise, MuSig 2 mode: both agg1 and agg2 matter.
+    // Normalize both halves by checking agg1’s parity.
+    let flip = agg1.y_is_odd();
     if flip {
-        agg = -agg;
+        agg1 = -agg1;
+        agg2 = -agg2;
     }
-    Ok((agg, flip))
+    // Return a 66-byte reveal = compressed(agg1) ‖ compressed(agg2)
+    let mut out66 = Vec::with_capacity(66);
+    out66.extend_from_slice(&agg1.to_bytes_compressed());
+    if agg2 == Secp256k1Point::identity() {
+        out66.extend_from_slice(&[0u8; 33]);
+    } else {
+        out66.extend_from_slice(&agg2.to_bytes_compressed());
+    }
+    Ok((Reveal(out66), flip))
 }
 
 #[cfg(test)]
@@ -138,7 +265,11 @@ mod tests {
     /// Helper to get the point out of a Reveal.
     fn decode_reveal(r: &Reveal) -> Secp256k1Point {
         let Reveal(bytes) = r.clone();
-        Secp256k1Point::from_bytes_compressed(&bytes).unwrap()
+        let bytes: &[u8; 33] = bytes
+            .as_slice()
+            .try_into()
+            .expect("Reveal must be 33 bytes");
+        Secp256k1Point::from_bytes_compressed(bytes).unwrap()
     }
 
     /// Helper to get the raw commitment bytes.
@@ -202,8 +333,9 @@ mod tests {
         let n2 = NonceCommitment::random().unwrap();
         let revs = vec![n1.reveal(), n2.reveal()];
         let (agg, flipped) = aggregate_nonces(&revs).unwrap();
+        let combined_point = decode_reveal(&agg);
         // should normalize to even-Y
-        assert!(!agg.y_is_odd());
+        assert!(!combined_point.y_is_odd());
         // flipped flag matches raw oddness
         let raw = decode_reveal(&revs[0]) + &decode_reveal(&revs[1]);
         assert_eq!(flipped, raw.y_is_odd());
@@ -212,9 +344,10 @@ mod tests {
     #[test]
     fn test_aggregate_single() {
         let g = Secp256k1Point::generator();
-        let r = Reveal(g.to_bytes_compressed());
+        let r = Reveal(g.to_bytes_compressed().to_vec());
         let (agg, flipped) = aggregate_nonces(&[r]).unwrap();
-        assert_eq!(agg, g);
+        let combined_point = decode_reveal(&agg);
+        assert_eq!(combined_point, g);
         assert!(!flipped);
     }
 
@@ -231,9 +364,10 @@ mod tests {
         // Use a single negated generator → should flip back
         let g = Secp256k1Point::generator();
         let neg = -g.clone();
-        let r = Reveal(neg.to_bytes_compressed());
+        let r = Reveal(neg.to_bytes_compressed().to_vec());
         let (agg, flipped) = aggregate_nonces(&[r]).unwrap();
-        assert_eq!(agg, g);
+        let combined_point = decode_reveal(&agg);
+        assert_eq!(combined_point, g);
         assert!(flipped);
     }
 
@@ -250,20 +384,22 @@ mod tests {
             0x14, 0xF6, 0x6A, 0x59, 0xF6, 0xCD, 0x01, 0xC0, 0xE8, 0x8C, 0xAA, 0x8E, 0x5F, 0x31,
             0x66, 0xB1, 0xF6, 0x76, 0xA6,
         ];
-        let r0 = Reveal(p0);
-        let r1 = Reveal(p1);
+        let r0 = Reveal(p0.to_vec());
+        let r1 = Reveal(p1.to_vec());
         let R0 = decode_reveal(&r0);
         let R1 = decode_reveal(&r1);
-        let raw = R0.clone() + &R1.clone();
-        let (agg, flipped) = aggregate_nonces(&[r0.clone(), r1.clone()]).unwrap();
+        let raw = R0 + &R1;
+        let (agg_reveal, flipped) = aggregate_nonces(&[r0.clone(), r1.clone()]).unwrap();
 
         assert_eq!(flipped, raw.y_is_odd());
+
         let expected_pt = if raw.y_is_odd() {
             -raw.clone()
         } else {
             raw.clone()
         };
-        assert_eq!(agg, expected_pt);
+
+        assert_eq!(agg_reveal.0, expected_pt.to_bytes_compressed().to_vec());
 
         // Check raw prefix byte
         let raw_bytes = raw.to_bytes_compressed();
@@ -276,7 +412,12 @@ mod tests {
             0x5A, 0x8E, 0xCC, 0xBE, 0x9D, 0x0F, 0xD7, 0x30, 0x68, 0x01, 0x2C, 0x89, 0x4E, 0x2E,
             0x87, 0xCC, 0xB5, 0x80, 0x4B,
         ];
-        assert_eq!(agg.to_bytes_compressed(), expected_bytes);
+
+        assert_eq!(
+            agg_reveal.0,
+            expected_bytes.to_vec(),
+            "Aggregated Reveal bytes do not match expected static vector"
+        );
     }
 
     #[test]

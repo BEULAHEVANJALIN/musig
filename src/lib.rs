@@ -4,11 +4,14 @@
 mod keyagg;
 pub use keyagg::keyagg;
 pub use keyagg::keyagg_pure;
-mod nonce;
+pub mod nonce;
 pub use nonce::NonceCommitment;
-pub use nonce::aggregate_nonces;
+pub use nonce::{Reveal, aggregate_nonces};
 mod challenge;
 pub use challenge::compute_challenge;
 pub mod session;
+pub use session::Musig1Session;
+pub mod error;
+pub use error::MusigError;
 pub mod sign;
 pub mod verify;

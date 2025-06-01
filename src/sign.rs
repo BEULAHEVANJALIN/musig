@@ -43,7 +43,7 @@ pub enum MusigError {
 
 /// Interactive MuSig1 signer for multi-party protocols.
 pub struct Musig1Signer {
-    session: Musig1Session,
+    pub session: Musig1Session,
 }
 
 impl Musig1Signer {

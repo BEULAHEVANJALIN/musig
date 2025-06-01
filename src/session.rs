@@ -124,12 +124,13 @@ impl Musig1Session {
         }
         // Include our own reveal last
         pts.push(self.nonce.reveal());
-        let (R, flip) = aggregate_nonces(&pts).expect("agg nonces");
+        let (agg_reveal, flip) = aggregate_nonces(&pts).expect("agg nonces");
+        let R_point = Reveal::decode_reveal(&agg_reveal);
         // Apply flip to our local nonce secret
         let mut n = self.nonce.clone();
         n.apply_flip(flip);
         self.nonce = n;
-        self.R_agg = Some(R);
+        self.R_agg = Some(R_point);
         self.flipped = flip;
     }
 
@@ -146,6 +147,9 @@ impl Musig1Session {
     /// # Arguments
     /// - `idx`: Index of this signer in the `pubkeys` list.
     pub fn partial_sig(&self, idx: usize) -> Secp256k1Scalar {
+        if self.nonce.secret.is_zero() {
+            panic!("Cannot produce a partial signature with a zero secret nonce");
+        }
         let e = self.challenge.clone().unwrap();
         let a = &self.coeffs[idx];
         self.nonce.secret.clone() + &(a * &self.sk * &e)

@@ -44,7 +44,7 @@ use crypto_rs::secp256k1::{Secp256k1Point, Secp256k1Scalar};
 /// It is not recommended for production use where performance is critical.
 pub fn keyagg_pure(pubkeys: &[Secp256k1Point]) -> (Secp256k1Point, Vec<Secp256k1Scalar>) {
     assert!(!pubkeys.is_empty(), "No public keys provided");
-    // Trivial single-key case: single‐party Musig === plain Schnorr
+    // Trivial single-key case: single-party Musig === plain Schnorr
     if pubkeys.len() == 1 {
         let mut X_agg = pubkeys[0].clone();
         let mut coefs = vec![Secp256k1Scalar::one()];
@@ -154,13 +154,13 @@ pub fn keyagg(pubkeys: &[Secp256k1Point]) -> (Secp256k1Point, Vec<Secp256k1Scala
     // If they are, return the first public key as the aggregated key and assign a coefficient of 1 to each public key.
     // Proceed with the aggregation process only if the keys are not identical.
     // This is an optimization to avoid unnecessary computation when all keys are the same.
-    if pubkeys
-        .iter()
-        .all(|P| P.to_bytes_compressed() == pubkeys[0].to_bytes_compressed())
-    {
-        let coefs = vec![Secp256k1Scalar::one(); pubkeys.len()];
-        return (pubkeys[0].clone(), coefs);
-    }
+    // if pubkeys
+    //     .iter()
+    //     .all(|P| P.to_bytes_compressed() == pubkeys[0].to_bytes_compressed())
+    // {
+    //     let coefs = vec![Secp256k1Scalar::one(); pubkeys.len()];
+    //     return (pubkeys[0].clone(), coefs);
+    // }
 
     // 1) Compute list hash L over input-order compressed bytes
     let mut list_buf = Vec::with_capacity(pubkeys.len() * 33);
@@ -303,22 +303,54 @@ mod tests {
 
     #[test]
     fn aggregate_same_key_twice() {
-        use num_bigint::BigUint;
-        use num_traits::One;
-        // Pure-spec with duplicate keys
+        // pure-spec keyagg with duplicate keys
         let g = Secp256k1Point::generator();
-        let (X_agg, coefs) = keyagg_pure(&[g.clone(), g.clone()]);
-        assert_eq!(X_agg, g);
-        assert_eq!(coefs.len(), 2);
-        assert_eq!(coefs[0].value(), &BigUint::one());
-        assert_eq!(coefs[1].value(), &BigUint::one());
+        let (X_agg_pure, coefs_pure) = keyagg_pure(&[g.clone(), g.clone()]);
+        assert_eq!(X_agg_pure, g);
+        assert_eq!(coefs_pure.len(), 2);
+        assert_eq!(coefs_pure[0].value(), &BigUint::one());
+        assert_eq!(coefs_pure[1].value(), &BigUint::one());
 
-        // C-style with duplicate keys
+        // C-style keyagg with duplicate keys
         let g2 = Secp256k1Point::generator();
         let (X_agg_c, coefs_c) = keyagg(&[g2.clone(), g2.clone()]);
-        assert_eq!(X_agg_c, g2);
+
+        let g_bytes = g2.to_bytes_compressed(); // 33-byte [0x02||X]
+
+        // Compute L = tagged_hash("KeyAgg list", g_bytes || g_bytes)
+        let mut list_buf = Vec::with_capacity(2 * 33);
+        list_buf.extend_from_slice(&g_bytes);
+        list_buf.extend_from_slice(&g_bytes);
+        let L = tagged_hash("KeyAgg list", &list_buf);
+
+        // Compute coefficient h = from_bytes_be( tagged_hash("KeyAgg coefficient", L || g_bytes) )
+        let mut coef_buf = Vec::with_capacity(32 + 33);
+        coef_buf.extend_from_slice(&L);
+        coef_buf.extend_from_slice(&g_bytes);
+        let h = Secp256k1Scalar::from_bytes_be(&tagged_hash("KeyAgg coefficient", &coef_buf));
+
+        // Now the aggregated point before normalization is  (h·G + h·G)  =  (2·h)·G
+        let mut sum = &g2 * &h;
+        sum = sum + &(&g2 * &h);
+
+        // Finally “normalize to even-Y”: if sum.y_is_odd(), negate it.
+        let expected_Xagg = if sum.y_is_odd() { -sum } else { sum };
+
+        // --- Now assert that keyagg returned exactly that ---
+        assert_eq!(
+            X_agg_c, expected_Xagg,
+            "C-style keyagg: aggregate_of([G,G]) did not match 2·h·G→even-Y"
+        );
+
+        // Both coefficients must equal h
         assert_eq!(coefs_c.len(), 2);
-        assert_eq!(coefs_c[0].value(), &BigUint::one());
-        assert_eq!(coefs_c[1].value(), &BigUint::one());
+        assert_eq!(
+            coefs_c[0], h,
+            "C-style keyagg: first coefficient on duplicate G must be the hash-derived scalar h"
+        );
+        assert_eq!(
+            coefs_c[1], h,
+            "C-style keyagg: second coefficient on duplicate G must be the same hash-derived scalar h"
+        );
     }
 }
